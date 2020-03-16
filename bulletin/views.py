@@ -2,11 +2,16 @@ from flask import render_template, request, redirect, url_for, jsonify
 from flask.views import MethodView
 from flask_mongoengine.wtf import model_form
 from bulletin.models import Advert, Comment
+from bulletin import mycache
 
 class ListView(MethodView):
 
     def get(self):
-        adverts = Advert.objects.all()
+        if mycache.get('ListView'):
+            adverts = mycache.get('ListView')
+        else:
+            adverts = Advert.objects.all()
+            mycache.set('ListView', adverts)
         return render_template('adverts/list.html', adverts=adverts)
 
 
@@ -15,12 +20,21 @@ class DetailView(MethodView):
     form = model_form(Comment, exclude=['created_at'])
 
     def get_context(self, slug):
-        advert = Advert.objects.get_or_404(slug=slug)
-        form = self.form(request.form)
-        context = {
-            "advert": advert,
-            "form": form
-        }
+        if mycache.get('dv_get_advert_{}'.format(slug)):
+            advert = mycache.get('dv_get_advert_{}'.format(slug))
+            form = self.form(request.form)
+            context = {
+                "advert": advert,
+                "form": form
+            }
+        else:
+            advert = Advert.objects.get_or_404(slug=slug)
+            form = self.form(request.form)
+            context = {
+                "advert": advert,
+                "form": form
+            }
+            mycache.set('dv_get_advert_{}'.format(slug), advert)
         return context
 
     def get(self, slug):
@@ -38,21 +52,25 @@ class DetailView(MethodView):
             advert = context.get('advert')
             advert.comments.append(comment)
             advert.save()
-
+            mycache.delete('dv_get_advert_{}'.format(slug))
             return redirect(url_for('adverts.detail', slug=slug))
-
         return render_template('adverts/detail.html', **context)
 
 # Views for API
 
 def api_adverts_get():
-    all_ads = Advert.objects.all()
+    # Получение всех объявлений
+    if mycache.get('api_adverts_get'):
+        all_ads = mycache.get('api_adverts_get')
+    else:
+        all_ads = Advert.objects.all()
+        mycache.set('api_adverts_get', all_ads)
     return jsonify(all_ads)
 
 def api_adverts_post():
+    # Добавление нового объявдения
     response_object = {'status': 'Success'}
     post_data = request.get_json()
-    print('!!!!!!!!&&&&&&&&&&&', post_data)
     if post_data:
         if 'title' in dict.keys(post_data) and 'slug' in dict.keys(post_data) and 'body' in dict.keys(post_data):
             if not Advert.objects.filter(slug=post_data.get('slug')):
@@ -74,6 +92,7 @@ def api_adverts_post():
                     )
 
                 advert.save()
+                mycache.delete('api_adverts_get')
                 response_object['message'] = 'Advert added'
                 response_object['added_ad'] = advert
             else:
@@ -88,15 +107,23 @@ def api_adverts_post():
     return jsonify(response_object)
 
 def api_ad_detail_get(slug):
-    if Advert.objects(slug=slug):
-        return jsonify(Advert.objects(slug=slug))
+    # получение данных объявления по slug
+    if mycache.get('api_ad_detail_{}'.format(slug)):
+        response_object = mycache.get('api_ad_detail_{}'.format(slug))
     else:
-        response_object = {'status': 'Error'}
-        response_object['message'] = 'Advert not found'
+        ad_ob = Advert.objects(slug=slug)
+        if ad_ob:
+            response_object = ad_ob
+        else:
+            response_object = {'status': 'Error'}
+            response_object['message'] = 'Advert not found'
+        mycache.set('api_ad_detail_{}'.format(slug), response_object)
+    
     return jsonify(response_object)
     
 
 def api_comment_add(slug):
+    # Добавление коментария к обьявлению slug
     response_object = {'status': 'Success'}
     ad = Advert.objects.get(slug=slug)
     if ad:
@@ -110,6 +137,9 @@ def api_comment_add(slug):
                 print('Допиши добавление коммента', comment)
                 ad.comments.append(comment)
                 ad.save()
+                mycache.delete('api_ad_detail_{}'.format(slug))
+                mycache.delete('stat_for_{}'.format(slug))
+                mycache.delete('api_adverts_get')
                 response_object['message'] = 'Comment added successfully'
             else:
                 response_object = {'status': 'Error'}
@@ -124,19 +154,20 @@ def api_comment_add(slug):
     return jsonify(response_object)
 
 def api_tag_add(slug):
+    # Добавление тега или тэгов к обьявлению slug
     response_object = {'status': 'Success'}
     ad = Advert.objects.get(slug=slug)
     if ad:
         data = request.get_json()
         if data:
             if 'tags' in dict.keys(data): 
-                print(ad.tags)
-                print(data.get('tags'))
                 for tag in data.get('tags').split(','):
                     if not tag.strip() in ad.tags:
                         ad.tags.append(tag.strip())
-                    print(ad.tags)
-                    ad.save()
+                ad.save()
+                mycache.delete('api_ad_detail_{}'.format(slug))
+                mycache.delete('stat_for_{}'.format(slug))
+                mycache.delete('api_adverts_get')
                 response_object['message'] = 'Tags added successfully'
             else:
                 response_object = {'status': 'Error'}
@@ -151,13 +182,19 @@ def api_tag_add(slug):
     return jsonify(response_object)
 
 def api_ad_stat(slug):
+    # Статистика обьявления
     if Advert.objects(slug=slug):
-        response_object = {'status': 'Error'}
-        ad = Advert.objects.get(slug=slug)
-        tcount = len(ad.tags)
-        ccount = len(ad.comments)
-        response_object['number of tags'] = tcount
-        response_object['number of comments'] = ccount
+        response_object = {'status': 'Success'}
+        if mycache.get('stat_for_{}'.format(slug)):
+            response_object = mycache.get('stat_for_{}'.format(slug))
+            response_object['read_from_cache'] = 'Done'
+        else:
+            ad = Advert.objects.get(slug=slug)
+            tcount = len(ad.tags)
+            ccount = len(ad.comments)
+            response_object['number of tags'] = tcount
+            response_object['number of comments'] = ccount
+            mycache.set('stat_for_{}'.format(slug), response_object)
     else:
         response_object = {'status': 'Error'}
         response_object['message'] = 'Advert not found'
