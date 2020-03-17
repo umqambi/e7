@@ -9,6 +9,10 @@ adverts = Blueprint('adverts', __name__, template_folder='templates')
 adverts.add_url_rule('/ru/', view_func=ListView.as_view('list'))
 adverts.add_url_rule('/ru/<slug>/', view_func=DetailView.as_view('detail'))
 
+@app.route('/')
+def index():
+    return render_template('index.html')
+
 # Register the urls for API
 @app.route('/api/', methods=['GET', 'POST'])
 def adverts_api():

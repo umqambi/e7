@@ -4,6 +4,7 @@ from flask_mongoengine.wtf import model_form
 from bulletin.models import Advert, Comment
 from bulletin import mycache
 
+
 class ListView(MethodView):
 
     def get(self):
